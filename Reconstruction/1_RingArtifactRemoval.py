@@ -42,10 +42,6 @@ def main():
     exp_list = [15, 25, 33, 50, 67, 100, 200]  # Adjust as needed
     pos_list = [1, 2, 3, 4, 5, 7] # Adjust as needed
 
-    exp_list = [67, 200]  # Testing
-    pos_list = [2] # Testing
-
-
     for pos in pos_list:
         for exptime in exp_list:
             proj_stitched = load_projections(load_path, exptime, pos)

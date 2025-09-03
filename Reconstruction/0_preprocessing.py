@@ -20,7 +20,7 @@ import h5py
 from stitching import *
 import pandas as pd
 
-source_path = '/vault3/machine_learning/datasets/external/australianSynchrotronUnzipped/beamTimeFeb25/measurements/' #path to raw data
+source_path = '../Measurements/' #path to raw data
 save_path = '../ProcessedData/projStitched/' #path to save preprocessed projections
 
 device = setup_device()
@@ -32,8 +32,7 @@ if not os.path.exists(save_path):
     os.makedirs(save_path)
 
 def load_flat(path):
-    #ar = np.array(h5py.File(path)['entry']['data']['data']).mean(axis=0)[10:] #cut first 10 pixels which are faulty
-    ar = np.array(h5py.File(path)['entry']['data']['data']).mean(axis=0)[10:138] #testing
+    ar = np.array(h5py.File(path)['entry']['data']['data']).mean(axis=0)[10:] #cut first 10 pixels which are faulty
     return torch.from_numpy(ar[None, None])
 
 # Set up logging
@@ -43,18 +42,19 @@ logging.basicConfig(
     level=logging.ERROR,
     format='%(asctime)s - %(levelname)s - %(message)s' 
 )
+exp_list = [15, 25, 33, 50, 67, 100, 200]  # Adjust as needed
+pos_list = [1, 2, 3, 4, 5, 7] # Adjust as needed
 
 try:
-    for pos in [2]: #[1, 2, 3, 4, 5, 7]: #testing         
-        for exptime in [200, 67]: #[200, 100, 67, 50, 33, 25, 15]: #testing
+    for pos in pos_list:     
+        for exptime in exp_list: 
             try:
                 print(f"start processing pos {pos}, exposure time {exptime}")
                 path = source_path  + f'/Calf_31_pos{pos}_{exptime}ms/'
                 #load data
                 print("loading data")
                 f1 = h5py.File(path + '/SAMPLE.hdf')
-                #proj_stack = np.array(f1['entry']['data']['data'])[:, 10:] #cut first 10 pixels which are faulty
-                proj_stack = np.array(f1['entry']['data']['data'])[:, 10:138] #testing
+                proj_stack = np.array(f1['entry']['data']['data'])[:, 10:] #cut first 10 pixels which are faulty
                 
                 print("loading flats and darks")
                 #load flats and darks

@@ -59,14 +59,12 @@ def main():
     exp_list = [200, 100, 67, 50, 33, 25, 15]  # Adjust as needed
     pos_list = [1, 2, 3, 4, 5, 7] # Adjust as needed
 
-    exp_list = [200, 67]  # Adjust as needed
-    pos_list = [2] # Adjust as needed
      # Set to True to perform phase retrieval
     
     for pos in pos_list:
         for exptime in exp_list:
             
-            if ring_removal:
+            if ring_removal:    
                 print("performing ring removal")
                 proj_stitched = load_projections(load_path, exptime, pos, name=f'projStitched_{exptime}ms_pos{pos}.npy')
                 sinograms = proj_stitched.swapaxes(0, 2)
