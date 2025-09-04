@@ -4,12 +4,15 @@ Official code implementation of Neighbor2Inverse
 Overview of the project: 
 https://j-3to.github.io/Neighbor2Inverse/
 
-## Reconstruction
-Contains all scripts related to reconstructing the data. Reconstruction uses [torch-radon](https://github.com/matteo-ronchetti/torch-radon). 
+## Data
+We are currently figuring out the best way to share the data. A download link will be shared here.
+
+## Preprocessing, thickness retrieval, and reconstruction
+```\Reconstruction``` contains all scripts related to preprocessing and reconstructing the data. Reconstruction uses [torch-radon](https://github.com/matteo-ronchetti/torch-radon). 
 The original repo only works with torch<1.8. This forked version works with newer torch versions: [https://github.com/J-3TO/torch-radon.git](https://github.com/J-3TO/torch-radon.git).
 
 
-### Pipeline: \
+### Pipeline: 
 ```0_preprocessing.py``` : Flat-field, dark-current correction and stitching, processed data is saved as npy files.\
 ```1_RingArtifactRemoval.py``` : Applies sorting-based sinogram correction proposed by [Vo et al.](https://opg.optica.org/oe/fulltext.cfm?uri=oe-26-22-28396&id=399265)\
 ```2_PhaseRetrieval.py``` : Applies thickness retrieval proposed by [Paganin et al.](https://onlinelibrary.wiley.com/doi/10.1046/j.1365-2818.2002.01010.x)\
