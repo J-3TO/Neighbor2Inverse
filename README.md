@@ -1,7 +1,7 @@
 # Neighbor2Inverse
 Official code implementation of Neighbor2Inverse
 
-Overview of the project: 
+Overview of the project and interactive plots: 
 https://j-3to.github.io/Neighbor2Inverse/
 
 ## Data
