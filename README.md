@@ -1,8 +1,8 @@
 # Neighbor2Inverse
-Official code implementation of Neighbor2Inverse
+[![Interactive Demo](https://img.shields.io/badge/Interactive%20Demo-0099FF
+)](https://j-3to.github.io/Neighbor2Inverse/)
 
-Overview of the project and interactive plots: 
-https://j-3to.github.io/Neighbor2Inverse/
+Official code implementation of Neighbor2Inverse
 
 ## Data
 We are currently figuring out the best way to share the data. A download link will be shared here.
@@ -23,11 +23,16 @@ It is also possible to just run scripts ```0_preprocessing.py``` and ```3_recons
 ## Neighbor2Inverse
 First run ```0_calculateStats``` to get mean&std for each stack for normalization and save it in csv file.\
 To train run ```1_trainNeighbor2Inverse.py``` with the respective trainingparams.yml file:\
-```1_reconstruction.py --trainparams trainparamsNeighbor2InverseProjSub.yml``` : Trains Neighbor2Inverse with proj subsampling and regularization term\
-```1_reconstruction.py --trainparams trainparamsNeighbor2InverseSinoSub.yml``` : Trains Neighbor2Inverse with sino subsampling without regularization term\
-```1_reconstruction.py --trainparams trainparamsNeighbor2InverseDataVidelityOrigSino.yml``` : Trains Neighbor2Inverse with the origSino data fidelity term\
-```1_reconstruction.py --trainparams trainparamsNeighbor2InverseDataVidelityVirtSino.yml``` : Trains Neighbor2Inverse with the virtSino data fidelity term\
-```1_reconstruction.py --trainparams trainparamsSparse.yml``` : Trains Neighbor2Inverse without regularization and with sparse-sampling of 900 projections
+
+```python 1_reconstruction.py --trainparams trainparamsNeighbor2InverseProjSub.yml``` : Trains Neighbor2Inverse with proj subsampling and regularization term\
+
+```python 1_reconstruction.py --trainparams trainparamsNeighbor2InverseSinoSub.yml``` : Trains Neighbor2Inverse with sino subsampling without regularization term\
+
+```python 1_reconstruction.py --trainparams trainparamsNeighbor2InverseDataVidelityOrigSino.yml``` : Trains Neighbor2Inverse with the origSino data fidelity term\
+
+```python 1_reconstruction.py --trainparams trainparamsNeighbor2InverseDataVidelityVirtSino.yml``` : Trains Neighbor2Inverse with the virtSino data fidelity term\
+
+```python 1_reconstruction.py --trainparams trainparamsSparse.yml``` : Trains Neighbor2Inverse without regularization and with sparse-sampling of 900 projections
 
 
 
