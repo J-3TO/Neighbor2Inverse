@@ -917,21 +917,14 @@ class Neighbor2InverseSlice(pl.LightningModule):
                 
                 Forward Projects reconstruction into sinogram space.
                 
-                This function performs FBP reconstruction on a stack of sinograms. It applies
-                padding to handle edge effects and uses the Ram-Lak filter for reconstruction.
                 
                 Args:
-                    sin_stack_phase (torch.Tensor): Stack of phase-retrieved sinograms [num_slices, n_angles, det_count]
-                    crop (bool): Whether to crop the reconstructed image to original size. Defaults to True.
-                    angles (torch.Tensor): Angular positions in radians. Must match n_angles dimension of input.
+                    reco_stack_phase (torch.Tensor): Stack of reconstructions
+                    angles (torch.Tensor): Angular positions in radians. 
                     
                 Returns:
-                    torch.Tensor: Stack of reconstructed slices [num_slices, height, width]
+                    torch.Tensor: Stack of forward projected sinograms 
                 
-                Notes:
-                    - Uses the Ram-Lak filter for FBP reconstruction
-                    - Applies padding with cosine fade to reduce edge artifacts
-                    - Final image is cropped to match input dimensions if crop=True
                 """
 
                 image_size = reco_stack.shape[-1]
@@ -1614,22 +1607,16 @@ class Neighbor2InverseDataFidelity(pl.LightningModule):
                 
                 Forward Projects reconstruction into sinogram space.
                 
-                This function performs FBP reconstruction on a stack of sinograms. It applies
-                padding to handle edge effects and uses the Ram-Lak filter for reconstruction.
                 
                 Args:
-                    sin_stack_phase (torch.Tensor): Stack of phase-retrieved sinograms [num_slices, n_angles, det_count]
-                    crop (bool): Whether to crop the reconstructed image to original size. Defaults to True.
-                    angles (torch.Tensor): Angular positions in radians. Must match n_angles dimension of input.
+                    reco_stack_phase (torch.Tensor): Stack of reconstructions
+                    angles (torch.Tensor): Angular positions in radians. 
                     
                 Returns:
-                    torch.Tensor: Stack of reconstructed slices [num_slices, height, width]
+                    torch.Tensor: Stack of forward projected sinograms 
                 
-                Notes:
-                    - Uses the Ram-Lak filter for FBP reconstruction
-                    - Applies padding with cosine fade to reduce edge artifacts
-                    - Final image is cropped to match input dimensions if crop=True
                 """
+
                 # Store original size for final cropping
                 #print('move tensor to device')
  
