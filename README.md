@@ -1,6 +1,8 @@
 # Neighbor2Inverse
 [![Interactive Demo](https://img.shields.io/badge/Interactive%20Demo-0099FF
 )](https://j-3to.github.io/Neighbor2Inverse/)
+[![Data Download](https://img.shields.io/badge/Data%20Download-0099FF
+)](https://mediatum.ub.tum.de/1796778)
 
 Official code implementation of Neighbor2Inverse
 
