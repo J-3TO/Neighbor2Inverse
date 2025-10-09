@@ -5,7 +5,7 @@
 Official code implementation of Neighbor2Inverse
 
 ## Data
-We are currently figuring out the best way to share the data. A download link will be shared here.
+The data can be downloaded from [here](https://mediatum.ub.tum.de/1796778).
 
 ## Preprocessing, thickness retrieval, and reconstruction
 ```\Reconstruction``` contains all scripts related to preprocessing and reconstructing the data. Reconstruction uses [torch-radon](https://github.com/matteo-ronchetti/torch-radon). 
