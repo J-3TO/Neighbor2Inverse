@@ -23,18 +23,18 @@ The original repo only works with torch<1.8. This forked version works with newe
 It is also possible to just run scripts ```0_preprocessing.py``` and ```3_reconstruction.py``` and setting ```phase_retrieval``` and ```ring_removal``` to ```True``` in ```3_reconstruction.py```.
 
 ## Neighbor2Inverse
-First run ```0_calculateStats``` to get mean&std for each stack for normalization and save it in csv file.\
-To train run ```1_trainNeighbor2Inverse.py``` with the respective trainingparams.yml file:\
+First run ```0_calculateStats.py``` to get mean&std for each stack for normalization and save it in csv file.\
+To train run ```1_trainNeighbor2Inverse.py``` with the respective trainingparams.yml file:
 
-```python 1_reconstruction.py --trainparams trainparamsNeighbor2InverseProjSub.yml``` : Trains Neighbor2Inverse with proj subsampling and regularization term\
+```1_trainNeighbor2Inverse.py --trainparams trainparamsNeighbor2InverseProjSub.yml``` : Trains Neighbor2Inverse with proj subsampling and regularization term
 
-```python 1_reconstruction.py --trainparams trainparamsNeighbor2InverseSinoSub.yml``` : Trains Neighbor2Inverse with sino subsampling without regularization term\
+```1_trainNeighbor2Inverse.py --trainparams trainparamsNeighbor2InverseSinoSub.yml``` : Trains Neighbor2Inverse with sino subsampling without regularization term
 
-```python 1_reconstruction.py --trainparams trainparamsNeighbor2InverseDataVidelityOrigSino.yml``` : Trains Neighbor2Inverse with the origSino data fidelity term\
+```1_trainNeighbor2Inverse.py --trainparams trainparamsNeighbor2InverseDataVidelityOrigSino.yml``` : Trains Neighbor2Inverse with the origSino data fidelity term
 
-```python 1_reconstruction.py --trainparams trainparamsNeighbor2InverseDataVidelityVirtSino.yml``` : Trains Neighbor2Inverse with the virtSino data fidelity term\
+```1_trainNeighbor2Inverse.py --trainparams trainparamsNeighbor2InverseDataVidelityVirtSino.yml``` : Trains Neighbor2Inverse with the virtSino data fidelity term
 
-```python 1_reconstruction.py --trainparams trainparamsSparse.yml``` : Trains Neighbor2Inverse without regularization and with sparse-sampling of 900 projections
+```1_trainNeighbor2Inverse.py --trainparams trainparamsSparse.yml``` : Trains Neighbor2Inverse without regularization and with sparse-sampling of 900 projections
 
 
 
