@@ -7,7 +7,7 @@ import cv2
 from lightning.pytorch.callbacks import Callback
 import yaml
 from torchvision.utils import save_image
-from torch_radon import Radon
+from torch_radon import Radon, RadonFanbeam
 import pandas as pd
 from utilForwardProp import propTIE_torch
 
@@ -172,7 +172,7 @@ class Neighbor2NeighborModule(pl.LightningModule):
             
         loss = self.Lambda1 * loss1 + self.Lambda2 * loss2
 
-        return loss1, loss2, loss, noisy_sub1, noisy_sub2, noisy_sub1_denoised, noisy_sub2_denoised
+        return loss1, loss2, loss, noisy, noisy_sub1, noisy_sub2, noisy_sub1_denoised, noisy_sub2_denoised
 
     def validation_step(self, batch, batch_idx):
         noisy = batch
@@ -1696,7 +1696,931 @@ class Neighbor2InverseDataFidelity(pl.LightningModule):
     #         else:
     #             print(f"{name}: No gradient")
 
+class Neighbor2InverseClinical(pl.LightningModule):
+    """
+    A PyTorch Lightning module for Neighbor2Inverse Clinical image denoising. 
+    Differs from the other Neighbor2Inverse variants by not having the phase retrieval step.
+    """
+    def __init__(self, 
+                 network, 
+                 Lambda1, 
+                 Lambda2, 
+                 increase_ratio, 
+                 n_epoch, 
+                 lr, 
+                 loss_type='mse', 
+                 optimizer_algo='Adam', 
+                 scheduler_algo='MultiStepLR', 
+                 optimizer_params={}, 
+                 scheduler_params={}, 
+                 gamma=0.5,
+                 regularizer=True,
+                 subsampling = 'projection',
+                 ):
+        
+        super().__init__()
+        self.network = network
+        self.Lambda1 = Lambda1
+        self.Lambda2 = Lambda2
+        self.increase_ratio = increase_ratio
+        self.n_epoch = n_epoch
+        self.lr = lr
+        self.loss_type = loss_type
+        self.optimizer_algo = optimizer_algo
+        self.optimizer_params = optimizer_params
+        self.scheduler_algo = scheduler_algo
+        self.scheduler_params = scheduler_params
+        self.gamma = gamma
+        self.loss = torch.nn.MSELoss(reduction='mean')
+        self.regularizer = regularizer
+        self.subsampling = subsampling
+
+        if self.subsampling == 'sinogram':
+            self.factor = 1 
+        else:
+            self.factor = 2
+
+    def forward(self, x):
+        return self.network(x)
+
+    def training_step(self, batch, batch_idx):
+        '''
+        Training step for Neighbor2Inverse Clinical model.
+        '''
+        noisy, pat_name, filename, slice_index = batch
+        batch_size = noisy.shape[0]
+        n_angles = int(noisy.shape[1])
+        angles = torch.linspace(0, 2*np.pi, n_angles, device=noisy.device)
+
+        # Generate masks and subimages
+        if self.subsampling == 'sinogram':
+            noisy = noisy.swapaxes(1, 2)
+        
+        mask1, mask2 = generate_mask_pair(noisy)
+        noisy_sub1 = generate_subimages(noisy, mask1)
+        noisy_sub2 = generate_subimages(noisy, mask2)
+        
+        if self.subsampling == 'sinogram':
+            noisy_sub1 = noisy_sub1.swapaxes(1, 2)
+            noisy_sub2 = noisy_sub2.swapaxes(1, 2)
+
+        # Reconstruct subsampled data
+        n_angles_sub = int(noisy_sub1.shape[1])
+        angles_backproj = torch.linspace(0, 2*np.pi, n_angles_sub, device=noisy.device)
+        
+        proj_sub_stack = torch.concat((noisy_sub1, noisy_sub2), axis=0)
+        del noisy_sub1, noisy_sub2
+        
+        sin_stack_phase = proj_sub_stack.swapaxes(1, 2)
+        del proj_sub_stack
+        torch.cuda.empty_cache()
+        
+        reco_sub = self.reconstruct(sin_stack_phase, angles=angles_backproj, image_size=256, source_distance=2000 // self.factor) / 2
+        del sin_stack_phase
+        
+        reco_sub1, reco_sub2 = reco_sub[:batch_size], reco_sub[batch_size:]
+        del reco_sub
+        torch.cuda.empty_cache()
+
+        # Apply denoising network
+        noisy_inpt = reco_sub1
+        del reco_sub1
+        noisy_output = self(noisy_inpt)
+        del noisy_inpt
+        noisy_target = reco_sub2
+        del reco_sub2
+        torch.cuda.empty_cache()
+
+        if self.regularizer:
+            # Compute regularization loss
+            Lambda = self.current_epoch / self.n_epoch * self.increase_ratio
             
+            with torch.no_grad():
+                # Reconstruct full resolution
+                sino = noisy.swapaxes(1, 2)
+                sino_reshaped = sino.reshape(batch_size * 2, 1, sino.shape[2], sino.shape[3])
+                del sino
+                
+                reco = self.reconstruct(sino_reshaped, angles=angles)
+                del sino_reshaped
+                
+                reco_re = reco.reshape(batch_size, 2, reco.shape[2], reco.shape[3])
+                del reco
+
+                # Denoise full resolution reconstruction
+                if self.subsampling == 'sinogram':
+                    reco_denoised = self(reco_re)
+                    del reco_re
+                else:
+                    reco1, reco2 = reco_re[:, :1], reco_re[:, 1:]
+                    del reco_re
+                    
+                    reco_denoised1 = self(reco1)
+                    del reco1
+                    
+                    reco_denoised2 = self(reco2)
+                    del reco2
+                    
+                    reco_denoised = torch.concat((reco_denoised1, reco_denoised2), axis=0)
+                    del reco_denoised1, reco_denoised2
+                
+                torch.cuda.empty_cache()
+
+                # Forward project denoised reconstruction
+                forward_denoised = self.forward_proj(reco_denoised, angles=angles, image_size=512)
+                del reco_denoised
+                forward_denoised = [forward_denoised[i::batch_size, 0] for i in range(batch_size)]
+                forward_denoised = torch.stack(forward_denoised, dim=0)
+                forward_denoised = forward_denoised.swapaxes(1, 2)
+                torch.cuda.empty_cache()
+
+            # Apply subsampling to forward projection
+            if self.subsampling == 'sinogram':
+                forward_denoised = forward_denoised.swapaxes(1, 2)
+            
+            forward_denoised_sub1 = generate_subimages(forward_denoised, mask1)
+            forward_denoised_sub2 = generate_subimages(forward_denoised, mask2)
+            del forward_denoised, mask1, mask2
+            torch.cuda.empty_cache()
+
+            if self.subsampling == 'sinogram':
+                forward_denoised_sub1 = forward_denoised_sub1.swapaxes(1, 2)
+                forward_denoised_sub2 = forward_denoised_sub2.swapaxes(1, 2)
+            
+            # Reconstruct subsampled forward projection
+            proj_forward_sub_stack = torch.concat((forward_denoised_sub1, forward_denoised_sub2), axis=0)
+            del forward_denoised_sub1, forward_denoised_sub2
+            
+            sin_stack_phase_reg = proj_forward_sub_stack.swapaxes(1, 2)
+            del proj_forward_sub_stack
+            torch.cuda.empty_cache()
+
+            backward_denoised_sub = self.reconstruct(sin_stack_phase_reg, angles=angles_backproj, image_size=256, source_distance=2000 // self.factor) / self.factor
+            del sin_stack_phase_reg
+            
+            backward_denoised_sub = [backward_denoised_sub[i::batch_size] for i in range(batch_size)]
+            backward_denoised_sub = torch.stack(backward_denoised_sub, dim=0)
+            backward_denoised_sub1 = backward_denoised_sub[:, :1]
+            backward_denoised_sub2 = backward_denoised_sub[:, 1:]
+            del backward_denoised_sub
+            torch.cuda.empty_cache()
+
+            # Compute losses
+            diff = noisy_output - noisy_target
+            exp_diff = backward_denoised_sub1 - backward_denoised_sub2
+            del backward_denoised_sub1, backward_denoised_sub2
+            
+            loss1 = torch.mean(diff ** 2)
+            loss2 = Lambda * torch.mean((diff - exp_diff) ** 2)
+            del diff, exp_diff
+            
+            loss = self.Lambda1 * loss1 + self.Lambda2 * loss2
+            torch.cuda.empty_cache()
+
+            # Log losses
+            self.log('train_loss1', loss1, on_epoch=True, sync_dist=True)
+            self.log('train_loss2', loss2, on_epoch=True, sync_dist=True)
+            self.log('train_loss', loss, on_epoch=True, sync_dist=True, prog_bar=True)
+    
+        return loss
+
+
+    def validation_step(self, batch, batch_idx):
+        '''
+        Validation step for Neighbor2Inverse Clinical model.
+        '''
+        noisy, pat_name, filename, slice_index = batch
+        batch_size = noisy.shape[0]
+        n_angles = int(noisy.shape[1])
+        angles = torch.linspace(0, 2*np.pi, n_angles, device=noisy.device)
+
+        # Generate masks and subimages
+        if self.subsampling == 'sinogram':
+            noisy = noisy.swapaxes(1, 2)
+        
+        mask1, mask2 = generate_mask_pair(noisy)
+        noisy_sub1 = generate_subimages(noisy, mask1)
+        noisy_sub2 = generate_subimages(noisy, mask2)
+        
+        if self.subsampling == 'sinogram':
+            noisy_sub1 = noisy_sub1.swapaxes(1, 2)
+            noisy_sub2 = noisy_sub2.swapaxes(1, 2)
+
+        # Reconstruct subsampled data
+        n_angles_sub = int(noisy_sub1.shape[1])
+        angles_backproj = torch.linspace(0, 2*np.pi, n_angles_sub, device=noisy.device)
+        
+        proj_sub_stack = torch.concat((noisy_sub1, noisy_sub2), axis=0)
+        del noisy_sub1, noisy_sub2
+        
+        sin_stack_phase = proj_sub_stack.swapaxes(1, 2)
+        del proj_sub_stack
+        torch.cuda.empty_cache()
+        
+        reco_sub = self.reconstruct(sin_stack_phase, angles=angles_backproj, image_size=256, source_distance=2000 // self.factor) / 2
+        del sin_stack_phase
+        
+        reco_sub1, reco_sub2 = reco_sub[:batch_size], reco_sub[batch_size:]
+        del reco_sub
+        torch.cuda.empty_cache()
+
+        # Apply denoising network
+        noisy_inpt = reco_sub1
+        del reco_sub1
+        noisy_output = self(noisy_inpt)
+        del noisy_inpt
+        noisy_target = reco_sub2
+        del reco_sub2
+        torch.cuda.empty_cache()
+
+        if self.regularizer:
+            # Compute regularization loss
+            Lambda = 1
+            
+            with torch.no_grad():
+                # Reconstruct full resolution
+                sino = noisy.swapaxes(1, 2)
+                sino_reshaped = sino.reshape(batch_size * 2, 1, sino.shape[2], sino.shape[3])
+                del sino
+                reco = self.reconstruct(sino_reshaped, angles=angles)
+                del sino_reshaped
+                
+                reco_re = reco.reshape(batch_size, 2, reco.shape[2], reco.shape[3])
+                del reco
+
+                # Denoise full resolution reconstruction
+                if self.subsampling == 'sinogram':
+                    reco_denoised = self(reco_re)
+                    del reco_re
+                else:
+                    reco1, reco2 = reco_re[:, :1], reco_re[:, 1:]
+                    del reco_re
+                    
+                    reco_denoised1 = self(reco1)
+                    del reco1
+                    
+                    reco_denoised2 = self(reco2)
+                    del reco2
+                    
+                    reco_denoised = torch.concat((reco_denoised1, reco_denoised2), axis=0)
+                    del reco_denoised1, reco_denoised2
+                
+                torch.cuda.empty_cache()
+
+                # Forward project denoised reconstruction
+                forward_denoised = self.forward_proj(reco_denoised, angles=angles, image_size=512)
+                del reco_denoised
+                forward_denoised = [forward_denoised[i::batch_size, 0] for i in range(batch_size)]
+                forward_denoised = torch.stack(forward_denoised, dim=0)
+                forward_denoised = forward_denoised.swapaxes(1, 2)
+                torch.cuda.empty_cache()
+
+            # Apply subsampling to forward projection
+            if self.subsampling == 'sinogram':
+                forward_denoised = forward_denoised.swapaxes(1, 2)
+            
+            forward_denoised_sub1 = generate_subimages(forward_denoised, mask1)
+            forward_denoised_sub2 = generate_subimages(forward_denoised, mask2)
+            del forward_denoised, mask1, mask2
+            torch.cuda.empty_cache()
+
+            if self.subsampling == 'sinogram':
+                forward_denoised_sub1 = forward_denoised_sub1.swapaxes(1, 2)
+                forward_denoised_sub2 = forward_denoised_sub2.swapaxes(1, 2)
+            
+            # Reconstruct subsampled forward projection
+            proj_forward_sub_stack = torch.concat((forward_denoised_sub1, forward_denoised_sub2), axis=0)
+            del forward_denoised_sub1, forward_denoised_sub2
+            
+            sin_stack_phase_reg = proj_forward_sub_stack.swapaxes(1, 2)
+            del proj_forward_sub_stack
+            torch.cuda.empty_cache()
+
+            backward_denoised_sub = self.reconstruct(sin_stack_phase_reg, angles=angles_backproj, image_size=256, source_distance=2000 // self.factor) / self.factor
+            del sin_stack_phase_reg
+            
+            backward_denoised_sub = [backward_denoised_sub[i::batch_size] for i in range(batch_size)]
+            backward_denoised_sub = torch.stack(backward_denoised_sub, dim=0)
+            backward_denoised_sub1 = backward_denoised_sub[:, :1]
+            backward_denoised_sub2 = backward_denoised_sub[:, 1:]
+            del backward_denoised_sub
+            torch.cuda.empty_cache()
+
+            # Compute losses
+            diff = noisy_output - noisy_target
+            exp_diff = backward_denoised_sub1 - backward_denoised_sub2
+            del backward_denoised_sub1, backward_denoised_sub2
+            
+            loss1 = torch.mean(diff ** 2)
+            loss2 = Lambda * torch.mean((diff - exp_diff) ** 2)
+            del diff, exp_diff
+            
+            loss = self.Lambda1 * loss1 + self.Lambda2 * loss2
+            torch.cuda.empty_cache()
+
+            # Log losses
+            self.log('val_loss1', loss1, on_epoch=True, sync_dist=True)
+            self.log('val_loss2', loss2, on_epoch=True, sync_dist=True)
+            self.log('val_loss', loss, on_epoch=True, sync_dist=True, prog_bar=True)
+            
+        return loss
+    
+    def get_train_images(self, batch, batch_idx):
+        '''
+        Function for debugging. Does the same things as the training_step/validation_step function, but returns the images
+        '''
+        noisy, pat_name, filename, slice_index = batch
+        batch_size = noisy.shape[0]
+        n_angles = int(noisy.shape[1])
+        angles = torch.linspace(0, 2*np.pi, n_angles, device=noisy.device)
+        
+        print(f"Input: n_angles={n_angles}, noisy shape={noisy.shape}")
+
+        # Generate masks and subimages
+        if self.subsampling == 'sinogram':
+            noisy = noisy.swapaxes(1, 2)
+        
+        mask1, mask2 = generate_mask_pair(noisy)
+        noisy_sub1 = generate_subimages(noisy, mask1)
+        noisy_sub2 = generate_subimages(noisy, mask2)
+        
+        if self.subsampling == 'sinogram':
+            noisy_sub1 = noisy_sub1.swapaxes(1, 2)
+            noisy_sub2 = noisy_sub2.swapaxes(1, 2)
+        
+        print(f"Subsampled: noisy_sub1 shape={noisy_sub1.shape}, noisy_sub2 shape={noisy_sub2.shape}")
+
+        # Reconstruct subsampled data
+        n_angles_sub = int(noisy_sub1.shape[1])
+        angles_backproj = torch.linspace(0, 2*np.pi, n_angles_sub, device=noisy.device)
+        
+        proj_sub_stack = torch.concat((noisy_sub1, noisy_sub2), axis=0)
+        #del noisy_sub1, noisy_sub2
+        
+        sin_stack_phase = proj_sub_stack.swapaxes(1, 2)
+        #del proj_sub_stack
+        torch.cuda.empty_cache()
+        
+        print(f"Reconstructing subsampled sinogram: shape={sin_stack_phase.shape}")
+        reco_sub = self.reconstruct(sin_stack_phase, angles=angles_backproj, image_size=256, source_distance=2000 // self.factor) / 2
+        #del sin_stack_phase
+        
+        reco_sub1, reco_sub2 = reco_sub[:batch_size], reco_sub[batch_size:]
+        #del reco_sub
+        torch.cuda.empty_cache()
+        
+        print(f"Reconstructed: reco_sub1 shape={reco_sub1.shape}, reco_sub2 shape={reco_sub2.shape}")
+
+        # Apply denoising network
+        #del reco_sub1
+        
+        noisy_inpt = reco_sub1
+        noisy_output = self(noisy_inpt)
+        #del noisy_inpt
+        noisy_target = reco_sub2
+        #del reco_sub2
+        torch.cuda.empty_cache()
+
+        if self.regularizer:
+            # Compute regularization loss
+            Lambda = self.current_epoch / self.n_epoch * self.increase_ratio
+            
+            with torch.no_grad():
+                # Reconstruct full resolution
+                sino = noisy.swapaxes(1, 2)
+                sino_reshaped = sino.reshape(batch_size * 2, 1, sino.shape[2], sino.shape[3])
+                #del sino
+                
+                print(f"Full reconstruction: sino shape={sino_reshaped.shape}")
+                reco = self.reconstruct(sino_reshaped, angles=angles)
+                #del sino_reshaped
+                
+                reco_re = reco.reshape(batch_size, 2, reco.shape[2], reco.shape[3])
+                print(f"Reshaped reconstruction: reco shape={reco.shape}")
+
+                # Denoise full resolution reconstruction
+                if self.subsampling == 'sinogram':
+                    reco_denoised = self(reco_re)
+                    #del reco
+                else:
+                    reco1, reco2 = reco_re[:, :1], reco_re[:, 1:]
+                    #del reco
+                    
+                    reco_denoised1 = self(reco1)
+                    #del reco1
+                    
+                    reco_denoised2 = self(reco2)
+                    #del reco2
+                    
+                    reco_denoised = torch.concat((reco_denoised1, reco_denoised2), axis=0)
+                    #del reco_denoised1, reco_denoised2
+                
+                torch.cuda.empty_cache()
+                print(f"Denoised reconstruction: shape={reco_denoised.shape}")
+
+                # Forward project denoised reconstruction
+                forward_denoised = self.forward_proj(reco_denoised, angles=angles, image_size=512)
+                #del reco_denoised
+                print(f"Forward projection before reshape: shape={forward_denoised.shape}")
+                forward_denoised = [forward_denoised[i::batch_size, 0] for i in range(batch_size)]
+                forward_denoised = torch.stack(forward_denoised, dim=0)
+                print("correct restacking", forward_denoised.shape)
+                forward_denoised = forward_denoised.swapaxes(1, 2)
+                torch.cuda.empty_cache()
+                
+                print(f"Forward projection: shape={forward_denoised.shape}")
+
+            # Apply subsampling to forward projection
+            if self.subsampling == 'sinogram':
+                forward_denoised = forward_denoised.swapaxes(1, 2)
+            
+            print(f"Masks: mask1 shape={mask1.shape}, mask2 shape={mask2.shape}")
+            
+            forward_denoised_sub1 = generate_subimages(forward_denoised, mask1)
+            forward_denoised_sub2 = generate_subimages(forward_denoised, mask2)
+            #del forward_denoised, mask1, mask2
+            torch.cuda.empty_cache()
+
+            if self.subsampling == 'sinogram':
+                forward_denoised_sub1 = forward_denoised_sub1.swapaxes(1, 2)
+                forward_denoised_sub2 = forward_denoised_sub2.swapaxes(1, 2)
+            
+            # Reconstruct subsampled forward projection
+            proj_forward_sub_stack = torch.concat((forward_denoised_sub1, forward_denoised_sub2), axis=0)
+            print("shape of proj_forward_sub_stack:", proj_forward_sub_stack.shape)
+            #del forward_denoised_sub1, forward_denoised_sub2
+            
+            sin_stack_phase_reg = proj_forward_sub_stack.swapaxes(1, 2)
+            print(f"Sinogram for backward projection: shape={sin_stack_phase_reg.shape}")
+            #sin_stack_phase_reg = sin_stack_phase_reg.reshape(batch_size * 2, 1, sin_stack_phase_reg.shape[2], sin_stack_phase_reg.shape[3])
+            #del proj_forward_sub_stack
+            torch.cuda.empty_cache()
+
+            print(f"Backward reconstruction: sinogram shape={sin_stack_phase_reg.shape}")
+            backward_denoised_sub = self.reconstruct(sin_stack_phase_reg, angles=angles_backproj, image_size=256, source_distance=2000 // self.factor) / self.factor
+            #del sin_stack_phase_reg
+            
+            backward_denoised_sub = [backward_denoised_sub[i::batch_size] for i in range(batch_size)]
+            backward_denoised_sub = torch.stack(backward_denoised_sub, dim=0)
+            print("correct restacking backward:", backward_denoised_sub.shape)
+            backward_denoised_sub1 = backward_denoised_sub[:, :1]
+            backward_denoised_sub2 = backward_denoised_sub[:, 1:]
+            #del backward_denoised_sub
+            torch.cuda.empty_cache()
+            
+            print(f"Backward: sub1 shape={backward_denoised_sub1.shape}, sub2 shape={backward_denoised_sub2.shape}")
+
+            # Compute losses
+            diff = noisy_output - noisy_target
+            exp_diff = backward_denoised_sub1 - backward_denoised_sub2
+            
+            loss1 = torch.mean(diff ** 2)
+            loss2 = Lambda * torch.mean((diff - exp_diff) ** 2)
+            #del diff, exp_diff
+            
+            loss = self.Lambda1 * loss1 + self.Lambda2 * loss2
+            torch.cuda.empty_cache()
+
+            # Log losses
+            self.log('val_loss1', loss1, on_epoch=True, sync_dist=True)
+            self.log('val_loss2', loss2, on_epoch=True, sync_dist=True)
+            self.log('val_loss', loss, on_epoch=True, sync_dist=True, prog_bar=True)
+            
+            return noisy, noisy_sub1, noisy_sub2, reco_sub1, reco_sub2, noisy_inpt, noisy_output, noisy_target, reco, reco_re, reco_denoised, forward_denoised, forward_denoised_sub1, forward_denoised_sub2, backward_denoised_sub1, backward_denoised_sub2, loss1, loss2, loss
+
+        else:
+            loss = self.loss(noisy_output, noisy_target)
+            self.log('val_loss', loss, on_epoch=True, sync_dist=True, prog_bar=True)
+            
+            return noisy, noisy_output, noisy_target, loss
+
+    def configure_optimizers(self):
+        if self.optimizer_algo == "Adam":
+            optimizer = torch.optim.Adam(self.network.parameters(), lr=self.lr, **self.optimizer_params)
+        if self.optimizer_algo == "AdamW":
+            optimizer = torch.optim.AdamW(self.network.parameters(), lr=self.lr, **self.optimizer_params)
+        print('optimizer', optimizer)
+        if self.scheduler_algo == "CosineAnnealingWarmRestarts":
+            scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(optimizer, **self.scheduler_params)
+        if self.scheduler_algo == "ReduceLROnPlateau":
+            scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, **self.scheduler_params)
+        if self.scheduler_algo == "StepLR":
+            scheduler = torch.optim.lr_scheduler.StepLR(optimizer, **self.scheduler_params)
+        if self.scheduler_algo == "MultiStepLR":
+             scheduler = torch.optim.lr_scheduler.MultiStepLR(
+                optimizer,
+                milestones=[
+                    int(20 * self.n_epoch/100) - 1,
+                    int(40 * self.n_epoch/100) - 1,
+                    int(60 * self.n_epoch/100) - 1,
+                    int(80 * self.n_epoch/100) - 1
+                ],
+                 **self.scheduler_params
+            )
+            
+        return {
+           'optimizer': optimizer,
+           'lr_scheduler': scheduler, 
+           'monitor': 'val_loss'}
+
+    def reconstruct(self, sinogram, angles=None, filter="ram-lak", image_size=512, source_distance=2000):
+            """
+            Reconstructs input sinogram stack using Filtered Back Projection (FBP).
+            
+            This function performs FBP reconstruction on a stack of sinograms. It applies
+            padding to handle edge effects and uses the Ram-Lak filter for reconstruction.
+            
+            Args:
+                sin_stack_phase (torch.Tensor): Stack of phase-retrieved sinograms [num_slices, n_angles, det_count]
+                crop (bool): Whether to crop the reconstructed image to original size. Defaults to True.
+                angles (torch.Tensor): Angular positions in radians. Must match n_angles dimension of input.
+                
+            Returns:
+                torch.Tensor: Stack of reconstructed slices [num_slices, height, width]
+            
+            Notes:
+                - Uses the Ram-Lak filter for FBP reconstruction
+                - Applies padding with cosine fade to reduce edge artifacts
+                - Final image is cropped to match input dimensions if crop=True
+            """
+            # Store original size for final cropping
+            #print('move tensor to device')
+            #print('sin stack phase shape', sin_stack_phase.shape)
+            # Apply padding to handle edge effects
+            
+
+            radon = RadonFanbeam(
+                image_size, 
+                angles, 
+                source_distance=source_distance,
+                det_spacing=1,  # Detector pixel spacing
+                clip_to_circle=False,  # Restrict reconstruction to circular field of view
+                det_count=int(2*image_size)
+            )
+            
+            # Apply Ram-Lak filter to padded sinogram
+            if filter == None:
+                filtered_sinogram = sinogram
+            else:
+                filtered_sinogram = radon.filter_sinogram(sinogram, filter_name=filter)
+            
+            # Apply backprojection step of FBP
+            fbp_filtered = radon.backprojection(filtered_sinogram)
+
+            return fbp_filtered
+
+    def forward_proj(self, reco_stack, angles=None, image_size=512):
+        """
+
+        Forward Projects reconstruction into sinogram space.
+
+
+        Args:
+            reco_stack_phase (torch.Tensor): Stack of reconstructions
+            angles (torch.Tensor): Angular positions in radians. 
+            
+        Returns:
+            torch.Tensor: Stack of forward projected sinograms 
+
+        """
+
+
+        radon = RadonFanbeam(
+            image_size, 
+            angles, 
+            source_distance=2000,
+            det_spacing=1,  # Detector pixel spacing
+            clip_to_circle=False,  # Restrict reconstruction to circular field of view
+            det_count=int(2*image_size)
+        )
+        #print("reco_stack shape:", reco_stack.shape)
+        sinogram = radon.forward(reco_stack.float())
+        #print("forward proj sinogram shape:", sinogram.shape)
+        return sinogram
+    
+
+    def pad_to_divisible(self, image, divisor):
+        """
+        Pads a tensor so that its height and width (last two dimensions) are divisible by a specified number.
+
+        Args:
+            image (torch.Tensor): Input tensor of shape (..., H, W).
+            divisor (int): The number to which height and width should be divisible.
+
+        Returns:
+            torch.Tensor: Padded tensor.
+            tuple: A tuple containing the padding before and after for height and width.
+        """
+        height, width = image.shape[-2:]
+
+        pad_height = (divisor - (height % divisor)) % divisor
+        pad_width = (divisor - (width % divisor)) % divisor
+
+        pad_before_height = pad_height // 2
+        pad_after_height = pad_height - pad_before_height
+
+        pad_before_width = pad_width // 2
+        pad_after_width = pad_width - pad_before_width
+
+        padding = (pad_before_width, pad_after_width, pad_before_height, pad_after_height)  # Left, Right, Top, Bottom
+        padded_image = F.pad(image, padding, mode='reflect')
+
+        return padded_image, (pad_before_height, pad_after_height, pad_before_width, pad_after_width)
+    
+    def unpad_from_divisible(self, padded_image, original_size):
+        """
+        Unpads a tensor to its original size after padding.
+
+        Args:
+            padded_image (torch.Tensor): Padded tensor of shape (..., H, W).
+            original_size (tuple): A tuple containing the padding before and after for height and width.
+
+        Returns:
+            torch.Tensor: Unpadded tensor.
+        """
+        pad_before_height, pad_after_height, pad_before_width, pad_after_width = original_size
+        unpadded_image = padded_image[..., pad_before_height:-pad_after_height, pad_before_width:-pad_after_width]
+        return unpadded_image
+    
+    # Uncomment the following method to print gradient norms after each backward pass for debugging
+    # def on_after_backward(self):
+    #     for name, param in self.named_parameters():
+    #         if param.grad is not None:
+    #             print(f"{name}: {param.grad.norm()}")
+    #         else:
+    #             print(f"{name}: No gradient")
+
+class LitmodelSupervised(pl.LightningModule):
+    """
+    A PyTorch Lightning module for supervised denoising. 
+    Performs the reconstruction on the fly from clean & noisy sinograms.
+    """
+    def __init__(self, 
+                 network, 
+                 lr, 
+                 loss_type='mse', 
+                 optimizer_algo='Adam', 
+                 scheduler_algo='MultiStepLR', 
+                 optimizer_params={}, 
+                 scheduler_params={}, 
+                 gamma=0.5,
+                 ):
+        
+        super().__init__()
+        self.network = network
+        self.lr = lr
+        self.loss_type = loss_type
+        self.optimizer_algo = optimizer_algo
+        self.optimizer_params = optimizer_params
+        self.scheduler_algo = scheduler_algo
+        self.scheduler_params = scheduler_params
+        self.gamma = gamma
+        self.loss = torch.nn.MSELoss(reduction='mean')
+
+    def forward(self, x):
+        return self.network(x)
+
+    def training_step(self, batch, batch_idx):
+        '''
+        Function for debugging. Does the same things as the training_step/validation_step function, but returns the images
+        '''
+        proj_clean, proj_noisy, pat_name, filename, slice_index = batch
+        batch_size = proj_noisy.shape[0]
+        n_angles = int(proj_noisy.shape[1])
+        angles = torch.linspace(0, 2*np.pi, n_angles, device=proj_noisy.device)
+        
+        proj_stack = torch.concat((proj_clean, proj_noisy), axis=0)
+        
+        sin_stack = proj_stack.swapaxes(1, 2)
+        torch.cuda.empty_cache()
+        
+        reco = self.reconstruct(sin_stack, angles=angles, image_size=512, source_distance=2000)
+        
+        reco_clean, reco_noisy = reco[:batch_size], reco[batch_size:]
+        torch.cuda.empty_cache()
+        
+
+        output = self(reco_noisy)
+        loss = self.loss(output, reco_clean)
+        self.log('train_loss', loss, on_epoch=True, sync_dist=True, prog_bar=True)
+            
+        return loss
+
+    def validation_step(self, batch, batch_idx):
+        '''
+        Function for debugging. Does the same things as the training_step/validation_step function, but returns the images
+        '''
+        proj_clean, proj_noisy, pat_name, filename, slice_index = batch
+        batch_size = proj_noisy.shape[0]
+        n_angles = int(proj_noisy.shape[1])
+        angles = torch.linspace(0, 2*np.pi, n_angles, device=proj_noisy.device)
+        
+        proj_stack = torch.concat((proj_clean, proj_noisy), axis=0)
+        
+        sin_stack = proj_stack.swapaxes(1, 2)
+        torch.cuda.empty_cache()
+        
+        reco = self.reconstruct(sin_stack, angles=angles, image_size=512, source_distance=2000)
+        
+        reco_clean, reco_noisy = reco[:batch_size], reco[batch_size:]
+        torch.cuda.empty_cache()
+        
+
+        output = self(reco_noisy)
+        loss = self.loss(output, reco_clean)
+        self.log('val_loss', loss, on_epoch=True, sync_dist=True, prog_bar=True)
+            
+        return loss
+    
+    def get_train_images(self, batch, batch_idx):
+        '''
+        Function for debugging. Does the same things as the training_step/validation_step function, but returns the images
+        '''
+        proj_clean, proj_noisy, pat_name, filename, slice_index = batch
+        batch_size = proj_noisy.shape[0]
+        n_angles = int(proj_noisy.shape[1])
+        angles = torch.linspace(0, 2*np.pi, n_angles, device=proj_noisy.device)
+        
+        proj_stack = torch.concat((proj_clean, proj_noisy), axis=0)
+        print("proj_stack", proj_stack.shape)
+        #del noisy_sub1, noisy_sub2
+        
+        sin_stack = proj_stack.swapaxes(1, 2)
+        print("sin_stack", sin_stack.shape)
+        #del proj_sub_stack
+        torch.cuda.empty_cache()
+        
+        print(f"Reconstructing sinogram: shape={sin_stack.shape}")
+        reco = self.reconstruct(sin_stack, angles=angles, image_size=512, source_distance=2000)
+        
+        reco_clean, reco_noisy = reco[:batch_size], reco[batch_size:]
+        #del reco_sub
+        torch.cuda.empty_cache()
+        
+        print(f"Reconstructed: reco_clean shape={reco_clean.shape}, reco_noisy shape={reco_noisy.shape}")
+        # Apply denoising network
+        #del reco_sub1
+        output = self(reco_noisy)
+        loss = self.loss(output, reco_clean)
+            #self.log('train_loss', loss, on_epoch=True, sync_dist=True, prog_bar=True)
+            
+        return proj_clean, proj_noisy, proj_stack, output, reco, reco_clean, reco_noisy, loss
+
+    def configure_optimizers(self):
+        if self.optimizer_algo == "Adam":
+            optimizer = torch.optim.Adam(self.network.parameters(), lr=self.lr, **self.optimizer_params)
+        if self.optimizer_algo == "AdamW":
+            optimizer = torch.optim.AdamW(self.network.parameters(), lr=self.lr, **self.optimizer_params)
+        print('optimizer', optimizer)
+        if self.scheduler_algo == "CosineAnnealingWarmRestarts":
+            scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(optimizer, **self.scheduler_params)
+        if self.scheduler_algo == "ReduceLROnPlateau":
+            scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, **self.scheduler_params)
+        if self.scheduler_algo == "StepLR":
+            scheduler = torch.optim.lr_scheduler.StepLR(optimizer, **self.scheduler_params)
+        if self.scheduler_algo == "MultiStepLR":
+             scheduler = torch.optim.lr_scheduler.MultiStepLR(
+                optimizer,
+                milestones=[
+                    int(20 * self.n_epoch/100) - 1,
+                    int(40 * self.n_epoch/100) - 1,
+                    int(60 * self.n_epoch/100) - 1,
+                    int(80 * self.n_epoch/100) - 1
+                ],
+                 **self.scheduler_params
+            )
+            
+        return {
+           'optimizer': optimizer,
+           'lr_scheduler': scheduler, 
+           'monitor': 'val_loss'}
+
+    def reconstruct(self, sinogram, angles=None, filter="ram-lak", image_size=512, source_distance=2000):
+            """
+            Reconstructs input sinogram stack using Filtered Back Projection (FBP).
+            
+            This function performs FBP reconstruction on a stack of sinograms. It applies
+            padding to handle edge effects and uses the Ram-Lak filter for reconstruction.
+            
+            Args:
+                sin_stack_phase (torch.Tensor): Stack of phase-retrieved sinograms [num_slices, n_angles, det_count]
+                crop (bool): Whether to crop the reconstructed image to original size. Defaults to True.
+                angles (torch.Tensor): Angular positions in radians. Must match n_angles dimension of input.
+                
+            Returns:
+                torch.Tensor: Stack of reconstructed slices [num_slices, height, width]
+            
+            Notes:
+                - Uses the Ram-Lak filter for FBP reconstruction
+                - Applies padding with cosine fade to reduce edge artifacts
+                - Final image is cropped to match input dimensions if crop=True
+            """
+            # Store original size for final cropping
+            #print('move tensor to device')
+            #print('sin stack phase shape', sin_stack_phase.shape)
+            # Apply padding to handle edge effects
+            
+
+            radon = RadonFanbeam(
+                image_size, 
+                angles, 
+                source_distance=source_distance,
+                det_spacing=1,  # Detector pixel spacing
+                clip_to_circle=False,  # Restrict reconstruction to circular field of view
+                det_count=int(2*image_size)
+            )
+            
+            # Apply Ram-Lak filter to padded sinogram
+            if filter == None:
+                filtered_sinogram = sinogram
+            else:
+                filtered_sinogram = radon.filter_sinogram(sinogram, filter_name=filter)
+            
+            # Apply backprojection step of FBP
+            fbp_filtered = radon.backprojection(filtered_sinogram)
+
+            return fbp_filtered
+
+    def forward_proj(self, reco_stack, angles=None, image_size=512):
+        """
+
+        Forward Projects reconstruction into sinogram space.
+
+
+        Args:
+            reco_stack_phase (torch.Tensor): Stack of reconstructions
+            angles (torch.Tensor): Angular positions in radians. 
+            
+        Returns:
+            torch.Tensor: Stack of forward projected sinograms 
+
+        """
+
+
+        radon = RadonFanbeam(
+            image_size, 
+            angles, 
+            source_distance=2000,
+            det_spacing=1,  # Detector pixel spacing
+            clip_to_circle=False,  # Restrict reconstruction to circular field of view
+            det_count=int(2*image_size)
+        )
+        #print("reco_stack shape:", reco_stack.shape)
+        sinogram = radon.forward(reco_stack.float())
+        #print("forward proj sinogram shape:", sinogram.shape)
+        return sinogram
+    
+
+    def pad_to_divisible(self, image, divisor):
+        """
+        Pads a tensor so that its height and width (last two dimensions) are divisible by a specified number.
+
+        Args:
+            image (torch.Tensor): Input tensor of shape (..., H, W).
+            divisor (int): The number to which height and width should be divisible.
+
+        Returns:
+            torch.Tensor: Padded tensor.
+            tuple: A tuple containing the padding before and after for height and width.
+        """
+        height, width = image.shape[-2:]
+
+        pad_height = (divisor - (height % divisor)) % divisor
+        pad_width = (divisor - (width % divisor)) % divisor
+
+        pad_before_height = pad_height // 2
+        pad_after_height = pad_height - pad_before_height
+
+        pad_before_width = pad_width // 2
+        pad_after_width = pad_width - pad_before_width
+
+        padding = (pad_before_width, pad_after_width, pad_before_height, pad_after_height)  # Left, Right, Top, Bottom
+        padded_image = F.pad(image, padding, mode='reflect')
+
+        return padded_image, (pad_before_height, pad_after_height, pad_before_width, pad_after_width)
+    
+    def unpad_from_divisible(self, padded_image, original_size):
+        """
+        Unpads a tensor to its original size after padding.
+
+        Args:
+            padded_image (torch.Tensor): Padded tensor of shape (..., H, W).
+            original_size (tuple): A tuple containing the padding before and after for height and width.
+
+        Returns:
+            torch.Tensor: Unpadded tensor.
+        """
+        pad_before_height, pad_after_height, pad_before_width, pad_after_width = original_size
+        unpadded_image = padded_image[..., pad_before_height:-pad_after_height, pad_before_width:-pad_after_width]
+        return unpadded_image
+    
+    # Uncomment the following method to print gradient norms after each backward pass for debugging
+    # def on_after_backward(self):
+    #     for name, param in self.named_parameters():
+    #         if param.grad is not None:
+    #             print(f"{name}: {param.grad.norm()}")
+    #         else:
+    #             print(f"{name}: No gradient")
 
 
 def padding_width_only(tensor: torch.Tensor, npad: int) -> torch.Tensor:

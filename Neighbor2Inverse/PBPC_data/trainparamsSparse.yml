@@ -1,0 +1,78 @@
+# general settings
+name: 'UNetSparse' #this name will appear as subfolder in the path
+base_network:
+  type: UNet
+  params:
+    in_nc: 1
+    out_nc: 1
+    residual: True
+    n_feature: 48
+
+    
+scale: 1
+gpus: [4]
+manual_seed: 42
+
+# dataset and data loader settings
+dataset:
+  sparseSampling: 2 #1 means no subsampling, 2 means half the projections, 3 a third of the projections, ...
+  path_proj: '../ProcessedData/projStitched/' 
+  path_reco: False  #False if reconstruction has not been precomputed
+  n_slicesPR: 14 #number of slices to load for thickness retrieval
+  n_slices: 2 #number of slices to load. Should be 2 for proj subsampling and 1 for sinogram subsampling. Only needed for regularization term
+  exptime: 15ms
+  df_stats_path: './reco_stats.csv'
+dataset_train:
+    df_path: './trainSplit.csv'
+dataset_val:
+    df_path: './valSplit.csv'
+    skip: 4 #only evaluate on a fourth of the slices for faster training
+
+train_loader:
+    shuffle: True
+    num_workers: 8
+    batch_size: 1
+val_loader:
+    shuffle: False
+    num_workers: 8
+    batch_size: 1
+
+lightning_params:
+    Lambda1: 1.0
+    Lambda2: 1.0
+    increase_ratio: 2.0
+    n_epoch: 100
+    lr: 0.0005
+    gamma: 0.5
+    loss_type: 'mse'
+    regularizer: False
+    df_stats_path: './reco_stats.csv'
+    subsampling: 'projection'
+    doPhaseRetrieval: True
+    dataFidelity: False
+
+    PR_params: 
+      delta: 0.8e-8
+      beta: 1.0e-11
+      pixel_size: 0.009 #in mm
+      energy: 70  # in keV
+      z: 5000 #in mm
+      batchsizePR: 1800 
+
+trainer_params:
+  accumulate_grad_batches: 4
+  limit_train_batches: 1000
+  precision: "bf16-mixed"
+
+optimizer_algo: 'Adam'
+optimizer_params:
+  weight_decay: 0
+
+scheduler_algo: 'ReduceLROnPlateau'
+scheduler_params: 
+    factor: 0.5
+    patience: 5
+earlyStopping: False
+
+save_path: './model_weights/SubsampleProj/Sparse/'
+

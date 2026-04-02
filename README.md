@@ -22,7 +22,7 @@ The original repo only works with torch<1.8. This forked version works with newe
 
 It is also possible to just run scripts ```0_preprocessing.py``` and ```3_reconstruction.py``` and setting ```phase_retrieval``` and ```ring_removal``` to ```True``` in ```3_reconstruction.py```.
 
-## Neighbor2Inverse
+## Neighbor2Inverse - PBBC data
 First run ```0_calculateStats.py``` to get mean&std for each stack for normalization and save it in csv file.\
 To train run ```1_trainNeighbor2Inverse.py``` with the respective trainingparams.yml file:
 
@@ -36,6 +36,10 @@ To train run ```1_trainNeighbor2Inverse.py``` with the respective trainingparams
 
 ```1_trainNeighbor2Inverse.py --trainparams trainparamsSparse.yml``` : Trains Neighbor2Inverse without regularization and with sparse-sampling of 900 projections
 
+## Neighbor2Inverse - PE data (clinical dataset)
+
+First download the RNSA PE challenge dataset and unzip. \
+Then run ```0_gen_datset.py``` and ```1_gen_identifier_list.py```. Then you can train Neighbor2Neighbor, Neighbor2Inverse or a supervised approach with the respective script. If you wish to save clean and noisy reconstructions run ```0p5_gen_reco.py```. This is not needed for training the three mentioned models though.
 
 
 

@@ -127,7 +127,6 @@ class ProjDatasetSlice(torch.utils.data.Dataset):
         filename_inp = f'{self.path}projStitched_{self.exptime}_{pos}.npy'
         filename_target = f'{self.path}projStitched_200ms_{pos}.npy'
 
-
         angle_index = int(angle_index)
         if angle_index + self.n_proj - 1 > 1799:
             angle_index = 1799 - self.n_proj + 1
@@ -204,3 +203,168 @@ class ProjDataset(torch.utils.data.Dataset):
 
         return proj_stack[:, 0]
         
+class ClinicalDataset(torch.utils.data.Dataset):
+    """
+    torch dataset for clinical PE data
+    Load projection/sinogram data and add Poisson noise
+    Returns sinograms
+    """
+
+    def __init__(self, path_sino, df_path, alpha=100_000, sigma_G=0.001, skip=1, n_slices=2, return_clean_proj=False):
+        
+        self.df = pd.read_csv(df_path)
+        self.identifier_list = self.df['identifier'].values[::skip]
+        self.path_sino = path_sino
+        self.alpha = alpha
+        self.sigma_G = sigma_G
+        self.return_clean_proj = return_clean_proj
+        self.n_slices = n_slices
+
+    def __len__(self):
+        return len(self.identifier_list)
+
+    def __getitem__(self, idx):
+        identifier = self.identifier_list[idx % len(self.identifier_list)]
+        pat_name, filename, slice_index = identifier.split("_")
+
+        #print('get proj stack')
+        proj_stack = self.load(pat_name, filename, slice_index)
+
+        proj_stack_noisy = self.add_PoissonGauss_noise(proj_stack, alpha=self.alpha, sigma_G=self.sigma_G)
+
+        if self.return_clean_proj:
+            return proj_stack, proj_stack_noisy, pat_name, filename, slice_index
+        else:
+            return proj_stack_noisy, pat_name, filename, slice_index
+
+    def getitem_identifier(self, identifier):
+        pat_name, filename, slice_index = identifier.split("_")
+
+        #print('get proj stack')
+        proj_stack = self.load(pat_name, filename, slice_index)
+
+        proj_stack_noisy = self.add_PoissonGauss_noise(proj_stack, alpha=self.alpha, sigma_G=self.sigma_G)
+
+        if self.return_clean_proj:
+            return proj_stack, proj_stack_noisy, pat_name, filename, slice_index
+        else:
+            return proj_stack_noisy, pat_name, filename, slice_index
+
+    def load(self, pat_name, filename, slice_index):
+
+        # Adjust slice index if needed
+        if int(slice_index) < self.n_slices:
+            slice_index = self.n_slices
+
+        slice_selection = (
+            slice(int(slice_index)-self.n_slices, int(slice_index)),
+            slice(None),
+            slice(None),
+            slice(None)
+        )
+
+        sino_stack = np.load(f'{self.path_sino}/{pat_name}.npy', mmap_mode='c')
+        #print(sino_stack.shape)
+        sino_stack = sino_stack[slice_selection]
+        #print(sino_stack.shape)
+        proj_stack = sino_stack.swapaxes(0, 2).astype('float32')
+
+        # Return the processed stacks
+        return proj_stack[:, 0]
+    
+    def add_PoissonGauss_noise(self, sinogram, alpha=100_000, sigma_G=0.001):
+        #scale up. higher alpha means more photons -> less noise
+        sino_min, sino_max = sinogram.min(), sinogram.max()
+        sinogram_re = (sinogram - sino_min)/(sino_max - sino_min)
+        meas = alpha*np.exp(-sinogram_re.astype(np.float32))
+        noisy = 1/alpha * np.random.poisson(meas)
+
+        noise_G_map = np.ones_like(noisy) * sigma_G
+        noisy_pg = np.random.randn(*noisy.shape) * noise_G_map + noisy
+
+        sinogram_noisy = -np.log(noisy_pg.astype(np.float32))
+        sinogram_noisy = sinogram_noisy * (sino_max - sino_min) + sino_min
+        return sinogram_noisy
+    
+
+class ClinicalDatasetProj(torch.utils.data.Dataset):
+    """
+    torch dataset for clinical PE data
+    Load projection/sinogram data and add Poisson noise
+    Returns a projection 
+    """
+
+    def __init__(self, path_sino, df_path, alpha=100_000, sigma_G=0.001, skip=1, n_projs=2, return_clean_proj=False, patch_x=128, patch_y=128):
+        
+        self.df = pd.read_csv(df_path)
+        pat_list = set([elem.split("_")[0] for elem in self.df["identifier"].values])
+        identifier_list = [f"{pat}_{nr}" for pat in pat_list for nr in range(2048)]
+        self.identifier_list = identifier_list[::skip]
+        self.path_sino = path_sino
+        self.alpha = alpha
+        self.sigma_G = sigma_G
+        self.return_clean_proj = return_clean_proj
+        self.n_projs = n_projs
+        self.patch_x = patch_x
+        self.patch_y = patch_y
+
+    def __len__(self):
+        return len(self.identifier_list)
+
+    def __getitem__(self, idx):
+        identifier = self.identifier_list[idx % len(self.identifier_list)]
+        pat_name, proj_index = identifier.split("_")
+
+        #print('get proj stack')
+        proj_stack = self.load(pat_name, proj_index)
+
+        proj_stack_noisy = self.add_PoissonGauss_noise(proj_stack, alpha=self.alpha, sigma_G=self.sigma_G)
+
+        if self.return_clean_proj:
+            return proj_stack, proj_stack_noisy
+        else:
+            return proj_stack_noisy
+
+    def load(self, pat_name, proj_index):
+
+        # Adjust slice index if needed
+        if int(proj_index) < self.n_projs:
+            proj_index = self.n_projs
+
+        sino_stack = np.load(f'{self.path_sino}/{pat_name}.npy', mmap_mode='c')
+        (shape_y, _, n_angles, shape_x) = sino_stack.shape
+        #(221, 1, 2048, 1024)
+
+        patch_size = (self.patch_y, self.patch_x)
+            
+        x_start = random.randint(0, int(shape_x) - int(patch_size[1]))
+        y_start = random.randint(0, int(shape_y) - int(patch_size[0]))
+
+        slice_selection = (
+            slice(int(y_start), int(y_start)+int(patch_size[0])),
+            slice(None),
+            slice(int(proj_index)-self.n_projs, int(proj_index)),
+            slice(int(x_start), int(x_start)+int(patch_size[1]))
+        )
+
+        #print(sino_stack.shape)
+        sino_stack = sino_stack[slice_selection]
+        #print(sino_stack.shape)
+        proj_stack = sino_stack.swapaxes(0, 2).astype('float32')
+
+        # Return the processed stacks
+        return proj_stack[:, 0]
+    
+    def add_PoissonGauss_noise(self, sinogram, alpha=100_000, sigma_G=0.001):
+        #scale up. higher alpha means more photons -> less noise
+        sino_min, sino_max = sinogram.min(), sinogram.max()
+        sinogram_re = (sinogram - sino_min)/(sino_max - sino_min)
+        meas = alpha*np.exp(-sinogram_re.astype(np.float32))
+        noisy = 1/alpha * np.random.poisson(meas)
+
+        noise_G_map = np.ones_like(noisy) * sigma_G
+        noisy_pg = np.random.randn(*noisy.shape) * noise_G_map + noisy
+
+        sinogram_noisy = -np.log(noisy_pg.astype(np.float32))
+        #sinogram_noisy = sinogram_noisy * (sino_max - sino_min) + sino_min
+        return sinogram_noisy

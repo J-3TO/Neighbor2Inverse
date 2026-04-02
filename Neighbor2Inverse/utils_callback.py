@@ -25,6 +25,52 @@ def normalize_to_range(tensor, vmin, vmax):
     tensor = (tensor - vmin) / (vmax - vmin)  # Normalize to [0, 1]
     return tensor
    
+
+
+class SavePredictionPE(Callback):
+    """
+    Callback to save model predictions on a validation dataset slice at the end of each epoch.
+    """
+    def __init__(self, input_file, output_dir="predictions", example_idx=0):
+        super().__init__()
+        self.input_file = input_file
+        self.output_dir = output_dir
+        self.example_idx = example_idx
+        os.makedirs(output_dir, exist_ok=True)
+
+    def on_validation_epoch_end(self, trainer, pl_module):
+        if trainer.is_global_zero:  # Ensure this runs only on the main process
+            self.save_current_progress(trainer, pl_module, "epoch")
+        
+    def on_train_start(self, trainer, pl_module):
+        if trainer.is_global_zero:
+            # Ensure this runs only on the main process
+            self.save_current_progress(trainer, pl_module, "start")
+        
+    def save_current_progress(self, trainer, pl_module, name):
+        """
+        Called when the epoch ends. Saves a prediction image to the output directory.
+        """
+        # Ensure model is in evaluation mode
+        input_image = torch.from_numpy(np.load(self.input_file).astype('float32')).to(pl_module.device)
+        pl_module.eval()
+        device = pl_module.device
+
+        # Get the example input image
+        #print('shape inpt, callback', input_image.shape)  # Add batch dimension
+        vmin, vmax = (-600 - 1500/2 + 1024)/4096, (-600 + 1500/2 + 1024)/4096
+
+        # Predict using the model
+        with torch.no_grad():
+            predicted_image = pl_module(input_image)
+
+        # Save the input, target, and predicted images
+        img_list = [normalize_to_range(img, vmin=vmin, vmax=vmax) for img in [input_image.squeeze(0).cpu(), predicted_image.squeeze(0).cpu()]]
+        save_image(img_list, os.path.join(self.output_dir, f"{name}_{trainer.current_epoch}_progress.png"))
+
+        # Switch back to training mode
+        pl_module.train()
+
 class SavePredictionCallbackSlice(Callback):
     """
     Callback to save model predictions on a validation dataset slice at the end of each epoch.
@@ -146,3 +192,50 @@ class SaveHyperparametersCallback(Callback):
             # Save hyperparameter file to the weights directory
             with open(f'{self.output_dir}/trainparams.yml', 'w') as outfile:
                 yaml.dump(self.file, outfile, default_flow_style=False)
+
+
+class SavePredictionCallbackProj(Callback):
+    """
+    Callback to save model predictions on a validation dataset proj at the end of each epoch.
+    """
+    def __init__(self, validation_dataset, output_dir="predictions", example_idx=0):
+        super().__init__()
+        self.validation_dataset = validation_dataset
+        self.output_dir = output_dir
+        self.example_idx = example_idx
+        os.makedirs(output_dir, exist_ok=True)
+
+    def on_validation_epoch_end(self, trainer, pl_module):
+        if trainer.is_global_zero:  # Ensure this runs only on the main process
+            self.save_current_progress(trainer, pl_module, "epoch")
+        
+    def on_train_start(self, trainer, pl_module):
+        if trainer.is_global_zero:
+            # Ensure this runs only on the main process
+            self.save_current_progress(trainer, pl_module, "start")
+        
+    def save_current_progress(self, trainer, pl_module, name):
+        """
+        Called when the epoch ends. Saves a prediction image to the output directory.
+        """
+        # Ensure model is in evaluation mode
+        pl_module.eval()
+        device = pl_module.device
+
+        # Get the example input image
+        input_image = self.validation_dataset.__getitem__(self.example_idx)
+        input_image = torch.from_numpy(input_image[:1]).to(device).unsqueeze(0)
+        #print('shape inpt, callback', input_image.shape)  # Add batch dimension
+        mn, std = input_image.mean().detach().cpu(), input_image.std().mean().detach().cpu()
+        vmin=mn-3*std
+        vmax=mn+3*std
+        # Predict using the model
+        with torch.no_grad():
+            predicted_image = pl_module(input_image)
+
+        # Save the input, target, and predicted images
+        img_list = [normalize_to_range(img, vmin=vmin, vmax=vmax) for img in [input_image.squeeze(0).cpu(),  predicted_image.squeeze(0).cpu()]]
+        save_image(img_list, os.path.join(self.output_dir, f"{name}_{trainer.current_epoch}_progress.png"))
+
+        # Switch back to training mode
+        pl_module.train()
