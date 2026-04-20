@@ -1,6 +1,6 @@
 import os
 os.environ["CUDA_DEVICE_ORDER"]="PCI_BUS_ID"
-os.environ["CUDA_VISIBLE_DEVICES"] = "2" #limit to one GPU, adjust as needed
+os.environ["CUDA_VISIBLE_DEVICES"] = "3" #limit to one GPU, adjust as needed
 import matplotlib
 import logging
 import traceback
@@ -42,7 +42,7 @@ logging.basicConfig(
     level=logging.ERROR,
     format='%(asctime)s - %(levelname)s - %(message)s' 
 )
-exp_list = [15, 25, 33, 50, 67, 100, 200]  # Adjust as needed
+exp_list = [200, 100, 67, 50, 33, 25, 15]  # Adjust as needed
 pos_list = [1, 2, 3, 4, 5, 7] # Adjust as needed
 
 try:

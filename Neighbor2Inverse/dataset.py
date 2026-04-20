@@ -8,11 +8,11 @@ import os
 class ProjDatasetSlice(torch.utils.data.Dataset):
     #Load projection (with option for sparse sampling) and corresponding reconstructed slice data
 
-    def __init__(self, path_proj, path_reco, df_path, df_stats_path, exptime, n_slices, skip=1, n_slicesPR=5, sparseSampling=1):
+    def __init__(self, path_proj, path_reco, df_path, df_stats_path, exptime, n_slices, skip=1, n_slicesPR=5, sparseSampling=1, total_n_slices=2149):
         
         self.df = pd.read_csv(df_path)
         self.positions = [int(elem) for elem in self.df['position'].values]
-        self.total_n_slices = 2149
+        self.total_n_slices = total_n_slices
         
         if exptime=='15ms':
             self.positions = [int(elem) for elem in list(self.positions) if 0 != elem]
@@ -141,7 +141,7 @@ class ProjDatasetSlice(torch.utils.data.Dataset):
 class ProjDataset(torch.utils.data.Dataset):
     #Load projection data only, with option for sparse-sampling
 
-    def __init__(self, path_proj, path_reco, df_path, df_stats_path, exptime, n_slices, skip=1, n_slicesPR=5, sparseSampling=1):
+    def __init__(self, path_proj, path_reco, df_path, df_stats_path, exptime, n_slices, skip=1, n_slicesPR=5, sparseSampling=1, total_n_slices=2149):
         
         self.df = pd.read_csv(df_path)
         self.positions = [int(elem) for elem in self.df['position'].values]
@@ -154,7 +154,7 @@ class ProjDataset(torch.utils.data.Dataset):
         self.exptime = exptime
         self.df_stats = pd.read_csv(df_stats_path)
         self.n_slices = n_slices
-        self.total_n_slices = 2149
+        self.total_n_slices = total_n_slices
         self.n_slicesPR = n_slicesPR
         self.sparseSampling = sparseSampling
 

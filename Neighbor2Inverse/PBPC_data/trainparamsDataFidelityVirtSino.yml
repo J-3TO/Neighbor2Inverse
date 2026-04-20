@@ -10,14 +10,14 @@ base_network:
 
     
 scale: 1
-gpus: [4]
+gpus: [3]
 manual_seed: 42
 
 # dataset and data loader settings
 dataset:
   sparseSampling: 1 #1 means no subsampling, 2 means half the projections, 3 a third of the projections, ...
-  path_proj: '../ProcessedData/projStitched/' 
-  path_reco: '../ProcessedData/recos/'  #False if reconstruction has not been precomputed
+  path_proj: '../../ProcessedData/projStitched/' 
+  path_reco: '../../ProcessedData/recos/'  #False if reconstruction has not been precomputed
   n_slicesPR: 14 #number of slices to load for thickness retrieval
   n_slices: 2 #number of slices to load. Should be 2 for proj subsampling and 1 for sinogram subsampling
   exptime: 15ms
@@ -30,12 +30,16 @@ dataset_val:
 
 train_loader:
     shuffle: True
-    num_workers: 8
+    num_workers: 4
     batch_size: 1
+    prefetch_factor: 1
+    persistent_workers: True
 val_loader:
     shuffle: False
-    num_workers: 8
+    num_workers: 4
     batch_size: 1
+    prefetch_factor: 1
+    persistent_workers: True
 
 lightning_params:
     LambdaN2N: 1.0
