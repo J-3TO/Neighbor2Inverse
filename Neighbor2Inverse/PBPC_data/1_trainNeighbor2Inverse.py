@@ -26,14 +26,14 @@ def main(trainparams):
     print(trainparams)
     
     # ----- initialize dataset -----
-    if trainparams['dataset']['path_reco'] is None:
-        #load only projections
-        dataset_train = ProjDataset(**trainparams['dataset'], **trainparams['dataset_train'])
-        dataset_val = ProjDataset(**trainparams['dataset'], **trainparams['dataset_val'])
-    else:
+    if trainparams['dataset']['path_reco']:
         #load projections and precomputed reconstructions
         dataset_train = ProjDatasetSlice(**trainparams['dataset'], **trainparams['dataset_train'])
         dataset_val = ProjDatasetSlice(**trainparams['dataset'], **trainparams['dataset_val'])
+    else:
+        #load only projections
+        dataset_train = ProjDataset(**trainparams['dataset'], **trainparams['dataset_train'])
+        dataset_val = ProjDataset(**trainparams['dataset'], **trainparams['dataset_val'])
 
     # initialize the dataloaders
     dataloader_train = DataLoader(dataset_train, **trainparams['train_loader'])
@@ -80,8 +80,8 @@ def main(trainparams):
         #load presaved test image
         
         prediction_callback = SavePredictionCallback(output_dir=save_path + f"/lightning_logs/version_{tblogger.version}/predictions/", 
-                                                     imagepath_inpt=os.path.abspath("../Test_Slices/") + f"/test_slice_{trainparams['dataset']['exptime']}_{int(1800/trainparams['dataset']['sparseSampling'])}projs.npy", 
-                                                     imagepath_target=os.path.abspath("../Test_Slices/") + f"/test_slice_{trainparams['dataset']['exptime']}_1800projs.npy", 
+                                                     imagepath_inpt=os.path.abspath("../../Test_Slices/") + f"/test_slice_{trainparams['dataset']['exptime']}_{int(1800/trainparams['dataset']['sparseSampling'])}projs.npy", 
+                                                     imagepath_target=os.path.abspath("../../Test_Slices/") + f"/test_slice_{trainparams['dataset']['exptime']}_1800projs.npy", 
                                                      exptime=f"{trainparams['dataset']['exptime']}") 
     else:
         #use a slice from the validation set
@@ -96,7 +96,7 @@ def main(trainparams):
                         accelerator='gpu',
                         devices=trainparams['gpus'], 
                         **trainparams['trainer_params'],
-                        #overfit_batches=3, #for debugging
+                        #overfit_batches=1, #for debugging
                         )
     
     trainer.fit(litmodel, dataloader_train, dataloader_val)
