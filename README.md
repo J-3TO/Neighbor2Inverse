@@ -3,8 +3,9 @@
 )](https://j-3to.github.io/Neighbor2Inverse/)
 [![Data Download](https://img.shields.io/badge/Data%20Download-0099FF
 )](https://mediatum.ub.tum.de/1796778)
+[![arXiv](https://img.shields.io/badge/arXiv-2605.01075-b31b1b.svg?style=flat)](https://arxiv.org/abs/2605.01075)
 
-Official code implementation of Neighbor2Inverse
+Official code implementation of Neighbor2Inverse. [Preprint](https://arxiv.org/abs/2605.01075)
 
 ## Data
 The data can be downloaded from [here](https://mediatum.ub.tum.de/1796778).
