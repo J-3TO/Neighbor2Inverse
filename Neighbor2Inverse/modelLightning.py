@@ -313,6 +313,7 @@ class Neighbor2InverseSlice(pl.LightningModule):
         else:
             noisy, reco, pos, exptime = batch
 
+        
         # Move constants outside the loop
         n_angles = int(noisy.shape[1])
         angles = torch.linspace(0, np.pi, n_angles + 1, device=noisy.device)[:-1]
@@ -443,7 +444,7 @@ class Neighbor2InverseSlice(pl.LightningModule):
             torch.cuda.empty_cache()
 
             # Backward projection
-            backward_denoised_sub = self.normalize(self.reconstruct(sin_stack_phase, angles=angles_backproj) / (self.factor), pos, exptime)
+            backward_denoised_sub = self.normalize(self.reconstruct(sin_stack_phase, angles=angles_backproj) / 2, pos, exptime)  # detector columns are halved in both subsampling modes
             del sin_stack_phase
             torch.cuda.empty_cache()
             
@@ -618,7 +619,7 @@ class Neighbor2InverseSlice(pl.LightningModule):
             torch.cuda.empty_cache()
 
             # Backward projection
-            backward_denoised_sub = self.normalize(self.reconstruct(sin_stack_phase, angles=angles_backproj) / (self.factor), pos, exptime)
+            backward_denoised_sub = self.normalize(self.reconstruct(sin_stack_phase, angles=angles_backproj) / 2, pos, exptime)  # detector columns are halved in both subsampling modes
             del sin_stack_phase
             torch.cuda.empty_cache()
             
@@ -796,7 +797,7 @@ class Neighbor2InverseSlice(pl.LightningModule):
 
             # Backward projection
             print("reconstruct sinogram shape:", sin_stack_phase.shape)
-            backward_denoised_sub = self.normalize(self.reconstruct(sin_stack_phase, angles=angles_backproj) / (self.factor), pos, exptime)
+            backward_denoised_sub = self.normalize(self.reconstruct(sin_stack_phase, angles=angles_backproj) / 2, pos, exptime)  # detector columns are halved in both subsampling modes
             torch.cuda.empty_cache()
             print("split again. Recon shape:", backward_denoised_sub.shape)
             backward_denoised_sub1, backward_denoised_sub2 = (
