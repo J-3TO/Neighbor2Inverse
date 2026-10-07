@@ -104,10 +104,8 @@ def recon_batch(sin_stack_phase, batch_size=8, n_angles=1800, centershift=0,  si
         sinogram = rivers(sinogram, size_rivers)  # 21 is the filter size for ring artifact correction
         
         # Apply center of rotation correction
-        #sinogram = correct_center_shift(sinogram, shift=centershift)
-        
-        # Define reconstruction geometrys
-
+        if center_shift != 0:
+            sinogram = correct_center_shift(sinogram, shift=centershift)
         
         # Apply filtering step of FBP
         filtered_sinogram = radon.filter_sinogram(sinogram, filter_name="ram-lak")

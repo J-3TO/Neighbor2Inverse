@@ -81,5 +81,9 @@ scheduler_params:
     factor: 0.5
     patience: 5
 
-earlyStopping: False
+earlyStopping: True
+earlyStopping_params:
+  monitor: val_loss
+  mode: min
+  patience: 6
 
