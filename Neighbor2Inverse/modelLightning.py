@@ -376,7 +376,11 @@ class Neighbor2InverseSlice(pl.LightningModule):
             Lambda = self.current_epoch / self.n_epoch * self.increase_ratio     
             with torch.no_grad():
                 if self.sparseSampling > 1:
-                    reco = noisyPR[:, :, self.n_slicesPR//(self.factor*2)-1:self.n_slicesPR//(self.factor*2)].swapaxes(1, 2)
+                    # same detector rows as the precomputed reconstruction in the non-sparse case:
+                    # 1 row (row 7 for n_slicesPR=14) for sinogram subsampling, 2 rows (6 and 7) for projection subsampling
+                    n_reco = self.n_slices * self.factor
+                    start = (self.n_slicesPR - n_reco + 1) // 2
+                    reco = noisyPR[:, :, start:start + n_reco].swapaxes(1, 2)
                     reco = self.normalize(self.reconstruct(reco, angles=angles), pos, exptime) 
                     del noisyPR
                     # Split and process original reconstructions
@@ -551,7 +555,11 @@ class Neighbor2InverseSlice(pl.LightningModule):
             Lambda = 1 # No need to compute this while debugging
             with torch.no_grad():
                 if self.sparseSampling > 1:
-                    reco = noisyPR[:, :, self.n_slicesPR//(self.factor*2)-1:self.n_slicesPR//(self.factor*2)].swapaxes(1, 2)
+                    # same detector rows as the precomputed reconstruction in the non-sparse case:
+                    # 1 row (row 7 for n_slicesPR=14) for sinogram subsampling, 2 rows (6 and 7) for projection subsampling
+                    n_reco = self.n_slices * self.factor
+                    start = (self.n_slicesPR - n_reco + 1) // 2
+                    reco = noisyPR[:, :, start:start + n_reco].swapaxes(1, 2)
                     reco = self.normalize(self.reconstruct(reco, angles=angles), pos, exptime) 
                     del noisyPR
                     # Split and process original reconstructions
@@ -734,7 +742,11 @@ class Neighbor2InverseSlice(pl.LightningModule):
             with torch.no_grad():
                 if self.sparseSampling > 1:
                     print("sparse recon")
-                    reco = noisyPR[:, :, self.n_slicesPR//(self.factor*2)-1:self.n_slicesPR//(self.factor*2)].swapaxes(1, 2)
+                    # same detector rows as the precomputed reconstruction in the non-sparse case:
+                    # 1 row (row 7 for n_slicesPR=14) for sinogram subsampling, 2 rows (6 and 7) for projection subsampling
+                    n_reco = self.n_slices * self.factor
+                    start = (self.n_slicesPR - n_reco + 1) // 2
+                    reco = noisyPR[:, :, start:start + n_reco].swapaxes(1, 2)
                     reco = self.normalize(self.reconstruct(reco, angles=angles), pos, exptime) 
                     # Split and process original reconstructions
 
@@ -1776,7 +1788,7 @@ class Neighbor2InverseClinical(pl.LightningModule):
         del proj_sub_stack
         torch.cuda.empty_cache()
         
-        reco_sub = self.reconstruct(sin_stack_phase, angles=angles_backproj, image_size=256, source_distance=2000 // self.factor) / 2
+        reco_sub = self.reconstruct(sin_stack_phase, angles=angles_backproj, image_size=256, source_distance=2000 // 2) / 2  # detector columns are halved in both subsampling modes
         del sin_stack_phase
         
         reco_sub1, reco_sub2 = reco_sub[:batch_size], reco_sub[batch_size:]
@@ -1798,14 +1810,16 @@ class Neighbor2InverseClinical(pl.LightningModule):
             
             with torch.no_grad():
                 # Reconstruct full resolution
-                sino = noisy.swapaxes(1, 2)
-                sino_reshaped = sino.reshape(batch_size * 2, 1, sino.shape[2], sino.shape[3])
+                # sinogram stack (B, n_slices, angles, det); in sinogram mode noisy is already in this layout
+                sino = noisy if self.subsampling == 'sinogram' else noisy.swapaxes(1, 2)
+                n_slices = sino.shape[1]
+                sino_reshaped = sino.reshape(batch_size * n_slices, 1, sino.shape[2], sino.shape[3])
                 del sino
                 
                 reco = self.reconstruct(sino_reshaped, angles=angles)
                 del sino_reshaped
                 
-                reco_re = reco.reshape(batch_size, 2, reco.shape[2], reco.shape[3])
+                reco_re = reco.reshape(batch_size, n_slices, reco.shape[2], reco.shape[3])
                 del reco
 
                 # Denoise full resolution reconstruction
@@ -1856,13 +1870,13 @@ class Neighbor2InverseClinical(pl.LightningModule):
             del proj_forward_sub_stack
             torch.cuda.empty_cache()
 
-            backward_denoised_sub = self.reconstruct(sin_stack_phase_reg, angles=angles_backproj, image_size=256, source_distance=2000 // self.factor) / self.factor
+            backward_denoised_sub = self.reconstruct(sin_stack_phase_reg, angles=angles_backproj, image_size=256, source_distance=2000 // 2) / 2  # detector columns are halved in both subsampling modes
             del sin_stack_phase_reg
             
             backward_denoised_sub = [backward_denoised_sub[i::batch_size] for i in range(batch_size)]
             backward_denoised_sub = torch.stack(backward_denoised_sub, dim=0)
-            backward_denoised_sub1 = backward_denoised_sub[:, :1]
-            backward_denoised_sub2 = backward_denoised_sub[:, 1:]
+            backward_denoised_sub1 = backward_denoised_sub[:, 0]  # (B, 1, H, W), same shape as noisy_output
+            backward_denoised_sub2 = backward_denoised_sub[:, 1]
             del backward_denoised_sub
             torch.cuda.empty_cache()
 
@@ -1881,6 +1895,11 @@ class Neighbor2InverseClinical(pl.LightningModule):
             # Log losses
             self.log('train_loss1', loss1, on_epoch=True, sync_dist=True)
             self.log('train_loss2', loss2, on_epoch=True, sync_dist=True)
+            self.log('train_loss', loss, on_epoch=True, sync_dist=True, prog_bar=True)
+
+        else:
+            # only L_Nei
+            loss = self.loss(noisy_output, noisy_target)
             self.log('train_loss', loss, on_epoch=True, sync_dist=True, prog_bar=True)
     
         return loss
@@ -1918,7 +1937,7 @@ class Neighbor2InverseClinical(pl.LightningModule):
         del proj_sub_stack
         torch.cuda.empty_cache()
         
-        reco_sub = self.reconstruct(sin_stack_phase, angles=angles_backproj, image_size=256, source_distance=2000 // self.factor) / 2
+        reco_sub = self.reconstruct(sin_stack_phase, angles=angles_backproj, image_size=256, source_distance=2000 // 2) / 2  # detector columns are halved in both subsampling modes
         del sin_stack_phase
         
         reco_sub1, reco_sub2 = reco_sub[:batch_size], reco_sub[batch_size:]
@@ -1940,13 +1959,15 @@ class Neighbor2InverseClinical(pl.LightningModule):
             
             with torch.no_grad():
                 # Reconstruct full resolution
-                sino = noisy.swapaxes(1, 2)
-                sino_reshaped = sino.reshape(batch_size * 2, 1, sino.shape[2], sino.shape[3])
+                # sinogram stack (B, n_slices, angles, det); in sinogram mode noisy is already in this layout
+                sino = noisy if self.subsampling == 'sinogram' else noisy.swapaxes(1, 2)
+                n_slices = sino.shape[1]
+                sino_reshaped = sino.reshape(batch_size * n_slices, 1, sino.shape[2], sino.shape[3])
                 del sino
                 reco = self.reconstruct(sino_reshaped, angles=angles)
                 del sino_reshaped
                 
-                reco_re = reco.reshape(batch_size, 2, reco.shape[2], reco.shape[3])
+                reco_re = reco.reshape(batch_size, n_slices, reco.shape[2], reco.shape[3])
                 del reco
 
                 # Denoise full resolution reconstruction
@@ -1997,13 +2018,13 @@ class Neighbor2InverseClinical(pl.LightningModule):
             del proj_forward_sub_stack
             torch.cuda.empty_cache()
 
-            backward_denoised_sub = self.reconstruct(sin_stack_phase_reg, angles=angles_backproj, image_size=256, source_distance=2000 // self.factor) / self.factor
+            backward_denoised_sub = self.reconstruct(sin_stack_phase_reg, angles=angles_backproj, image_size=256, source_distance=2000 // 2) / 2  # detector columns are halved in both subsampling modes
             del sin_stack_phase_reg
             
             backward_denoised_sub = [backward_denoised_sub[i::batch_size] for i in range(batch_size)]
             backward_denoised_sub = torch.stack(backward_denoised_sub, dim=0)
-            backward_denoised_sub1 = backward_denoised_sub[:, :1]
-            backward_denoised_sub2 = backward_denoised_sub[:, 1:]
+            backward_denoised_sub1 = backward_denoised_sub[:, 0]  # (B, 1, H, W), same shape as noisy_output
+            backward_denoised_sub2 = backward_denoised_sub[:, 1]
             del backward_denoised_sub
             torch.cuda.empty_cache()
 
@@ -2022,6 +2043,11 @@ class Neighbor2InverseClinical(pl.LightningModule):
             # Log losses
             self.log('val_loss1', loss1, on_epoch=True, sync_dist=True)
             self.log('val_loss2', loss2, on_epoch=True, sync_dist=True)
+            self.log('val_loss', loss, on_epoch=True, sync_dist=True, prog_bar=True)
+
+        else:
+            # only L_Nei
+            loss = self.loss(noisy_output, noisy_target)
             self.log('val_loss', loss, on_epoch=True, sync_dist=True, prog_bar=True)
             
         return loss
@@ -2063,7 +2089,7 @@ class Neighbor2InverseClinical(pl.LightningModule):
         torch.cuda.empty_cache()
         
         print(f"Reconstructing subsampled sinogram: shape={sin_stack_phase.shape}")
-        reco_sub = self.reconstruct(sin_stack_phase, angles=angles_backproj, image_size=256, source_distance=2000 // self.factor) / 2
+        reco_sub = self.reconstruct(sin_stack_phase, angles=angles_backproj, image_size=256, source_distance=2000 // 2) / 2  # detector columns are halved in both subsampling modes
         #del sin_stack_phase
         
         reco_sub1, reco_sub2 = reco_sub[:batch_size], reco_sub[batch_size:]
@@ -2088,15 +2114,17 @@ class Neighbor2InverseClinical(pl.LightningModule):
             
             with torch.no_grad():
                 # Reconstruct full resolution
-                sino = noisy.swapaxes(1, 2)
-                sino_reshaped = sino.reshape(batch_size * 2, 1, sino.shape[2], sino.shape[3])
+                # sinogram stack (B, n_slices, angles, det); in sinogram mode noisy is already in this layout
+                sino = noisy if self.subsampling == 'sinogram' else noisy.swapaxes(1, 2)
+                n_slices = sino.shape[1]
+                sino_reshaped = sino.reshape(batch_size * n_slices, 1, sino.shape[2], sino.shape[3])
                 #del sino
                 
                 print(f"Full reconstruction: sino shape={sino_reshaped.shape}")
                 reco = self.reconstruct(sino_reshaped, angles=angles)
                 #del sino_reshaped
                 
-                reco_re = reco.reshape(batch_size, 2, reco.shape[2], reco.shape[3])
+                reco_re = reco.reshape(batch_size, n_slices, reco.shape[2], reco.shape[3])
                 print(f"Reshaped reconstruction: reco shape={reco.shape}")
 
                 # Denoise full resolution reconstruction
@@ -2158,14 +2186,14 @@ class Neighbor2InverseClinical(pl.LightningModule):
             torch.cuda.empty_cache()
 
             print(f"Backward reconstruction: sinogram shape={sin_stack_phase_reg.shape}")
-            backward_denoised_sub = self.reconstruct(sin_stack_phase_reg, angles=angles_backproj, image_size=256, source_distance=2000 // self.factor) / self.factor
+            backward_denoised_sub = self.reconstruct(sin_stack_phase_reg, angles=angles_backproj, image_size=256, source_distance=2000 // 2) / 2  # detector columns are halved in both subsampling modes
             #del sin_stack_phase_reg
             
             backward_denoised_sub = [backward_denoised_sub[i::batch_size] for i in range(batch_size)]
             backward_denoised_sub = torch.stack(backward_denoised_sub, dim=0)
             print("correct restacking backward:", backward_denoised_sub.shape)
-            backward_denoised_sub1 = backward_denoised_sub[:, :1]
-            backward_denoised_sub2 = backward_denoised_sub[:, 1:]
+            backward_denoised_sub1 = backward_denoised_sub[:, 0]  # (B, 1, H, W), same shape as noisy_output
+            backward_denoised_sub2 = backward_denoised_sub[:, 1]
             #del backward_denoised_sub
             torch.cuda.empty_cache()
             

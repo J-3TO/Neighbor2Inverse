@@ -50,8 +50,9 @@ def main(trainparams):
                         optimizer_params = trainparams["optimizer_params"],
                         scheduler_params = trainparams["scheduler_params"],
                         n_slicesPR = trainparams["dataset"]['n_slicesPR'],
+                        sparseSampling = trainparams["dataset"]['sparseSampling'],
                         )
-        
+
     elif trainparams['lightning_params']['dataFidelity'] == True:
         litmodel = Neighbor2InverseDataFidelity(network=base_network, 
                         **trainparams["lightning_params"],
@@ -76,8 +77,8 @@ def main(trainparams):
         early_stopping = pl.pytorch.callbacks.EarlyStopping(monitor="val_loss", patience=10000) #dummy callback, will never trigger
 
     #init image logger
-    if trainparams['dataset']['path_reco'] is False:
-        #load presaved test image
+    if trainparams['dataset']['path_reco'] is False or trainparams['dataset']['sparseSampling'] > 1:
+        #load presaved test image (for sparse sampling, the dataset returns projections instead of a reconstruction)
         
         prediction_callback = SavePredictionCallback(output_dir=save_path + f"/lightning_logs/version_{tblogger.version}/predictions/", 
                                                      imagepath_inpt=os.path.abspath("../../Test_Slices/") + f"/test_slice_{trainparams['dataset']['exptime']}_{int(1800/trainparams['dataset']['sparseSampling'])}projs.npy", 
